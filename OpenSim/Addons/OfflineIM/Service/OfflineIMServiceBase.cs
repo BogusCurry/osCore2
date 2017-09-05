@@ -38,14 +38,13 @@ namespace OpenSim.OfflineIM
     public class OfflineIMServiceBase : ServiceBase
     {
         protected IOfflineIMData m_Database = null;
-		public int MAX_IM;
+
         public OfflineIMServiceBase(IConfigSource config)
             : base(config)
         {
             string dllName = String.Empty;
             string connString = String.Empty;
             string realm = "im_offline";
-			int MAX_IM = 50;
 
             //
             // Try reading the [DatabaseService] section, if it exists
@@ -68,7 +67,6 @@ namespace OpenSim.OfflineIM
                 dllName = imConfig.GetString("StorageProvider", dllName);
                 connString = imConfig.GetString("ConnectionString", connString);
                 realm = imConfig.GetString("Realm", realm);
-				MAX_IM = imConfig.GetInt("Max_Offline_IM", MAX_IM);
             }
 
             //
@@ -76,7 +74,6 @@ namespace OpenSim.OfflineIM
             //
             if (dllName.Equals(String.Empty))
                 throw new Exception("No StorageProvider configured");
-			    if (MAX_IM <= 0)MAX_IM = 50;
 
             m_Database = LoadPlugin<IOfflineIMData>(dllName, new Object[] { connString, realm });
             if (m_Database == null)

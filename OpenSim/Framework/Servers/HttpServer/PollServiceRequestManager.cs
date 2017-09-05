@@ -156,19 +156,6 @@ namespace OpenSim.Framework.Servers.HttpServer
             }
         }
 
-        public void DropByContext(PollServiceHttpRequest req)
-        {
-            Queue<PollServiceHttpRequest> ctxQeueue;
-            lock (m_bycontext)
-            {
-                if (m_bycontext.TryGetValue(req, out ctxQeueue))
-                {
-                    ctxQeueue.Clear();
-                    m_bycontext.Remove(req);
-                }
-            }
-        }
-
         public void EnqueueInt(PollServiceHttpRequest req)
         {
             if (m_running)
@@ -245,59 +232,23 @@ namespace OpenSim.Framework.Servers.HttpServer
             {
                 PollServiceHttpRequest req = m_requests.Dequeue(4500);
                 Watchdog.UpdateThread();
-                if(req == null)
-                    continue;
-
-                try
+                if (req != null)
                 {
-                    if(!req.HttpContext.CanSend())
+                    try
                     {
-                        req.PollServiceArgs.Drop(req.RequestID, req.PollServiceArgs.Id);
-                        byContextDequeue(req);
-                        continue;
-                    }
+                        if (req.PollServiceArgs.HasEvents(req.RequestID, req.PollServiceArgs.Id))
+                        {
+                            Hashtable responsedata = req.PollServiceArgs.GetEvents(req.RequestID, req.PollServiceArgs.Id);
 
-                    if(req.HttpContext.IsSending())
-                    {
-                        if ((Environment.TickCount - req.RequestTime) > req.PollServiceArgs.TimeOutms)
-                        {
-                            req.PollServiceArgs.Drop(req.RequestID, req.PollServiceArgs.Id);
-                            byContextDequeue(req);
-                        }
-                        else
-                          ReQueueEvent(req);
-                        continue;
-                    }
-
-                    if (req.PollServiceArgs.HasEvents(req.RequestID, req.PollServiceArgs.Id))
-                    {
-                        m_threadPool.QueueWorkItem(x =>
-                        {
-                            try
-                            {
-                                Hashtable responsedata = req.PollServiceArgs.GetEvents(req.RequestID, req.PollServiceArgs.Id);
-                                req.DoHTTPGruntWork(m_server, responsedata);
-                            }
-                            catch (ObjectDisposedException) { }
-                            finally
-                            {
-                                byContextDequeue(req);
-                            }
-                            return null;
-                        }, null);
-                    }
-                    else
-                    {
-                        if ((Environment.TickCount - req.RequestTime) > req.PollServiceArgs.TimeOutms)
-                        {
                             m_threadPool.QueueWorkItem(x =>
                             {
                                 try
                                 {
-                                    req.DoHTTPGruntWork(m_server,
-                                            req.PollServiceArgs.NoEvents(req.RequestID, req.PollServiceArgs.Id));
+                                    req.DoHTTPGruntWork(m_server, responsedata);
                                 }
-                                catch (ObjectDisposedException) {}
+                                catch (ObjectDisposedException)
+                                {
+                                }
                                 finally
                                 {
                                     byContextDequeue(req);
@@ -307,15 +258,39 @@ namespace OpenSim.Framework.Servers.HttpServer
                         }
                         else
                         {
-                            ReQueueEvent(req);
+                            if ((Environment.TickCount - req.RequestTime) > req.PollServiceArgs.TimeOutms)
+                            {
+                                m_threadPool.QueueWorkItem(x =>
+                                {
+                                    try
+                                    {
+                                        req.DoHTTPGruntWork(m_server,
+                                            req.PollServiceArgs.NoEvents(req.RequestID, req.PollServiceArgs.Id));
+                                    }
+                                    catch (ObjectDisposedException)
+                                    {
+                                    // Ignore it, no need to reply
+                                    }
+                                    finally
+                                    {
+                                        byContextDequeue(req);
+                                    }
+                                    return null;
+                                }, null);
+                            }
+                            else
+                            {
+                                ReQueueEvent(req);
+                            }
                         }
                     }
-                }
-                catch (Exception e)
-                {
-                    m_log.ErrorFormat("Exception in poll service thread: " + e.ToString());
+                    catch (Exception e)
+                    {
+                        m_log.ErrorFormat("Exception in poll service thread: " + e.ToString());
+                    }
                 }
             }
         }
+
     }
 }

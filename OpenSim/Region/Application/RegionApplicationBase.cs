@@ -50,7 +50,6 @@ namespace OpenSim
         protected Dictionary<EndPoint, uint> m_clientCircuits = new Dictionary<EndPoint, uint>();
         protected NetworkServersInfo m_networkServersInfo;
         protected uint m_httpServerPort;
-        protected bool m_httpServerSSL;
         protected ISimulationDataService m_simulationDataService;
         protected IEstateDataService m_estateDataService;
 
@@ -69,37 +68,20 @@ namespace OpenSim
 
             Initialize();
 
-            uint mainport = m_networkServersInfo.HttpListenerPort;
-            uint mainSSLport = m_networkServersInfo.httpSSLPort;
+            m_httpServer
+                = new BaseHttpServer(
+                    m_httpServerPort, m_networkServersInfo.HttpUsesSSL, m_networkServersInfo.httpSSLPort,
+                    m_networkServersInfo.HttpSSLCN);
 
-            if (m_networkServersInfo.HttpUsesSSL && (mainport == mainSSLport))
+            if (m_networkServersInfo.HttpUsesSSL && (m_networkServersInfo.HttpListenerPort == m_networkServersInfo.httpSSLPort))
             {
                 m_log.Error("[REGION SERVER]: HTTP Server config failed.   HTTP Server and HTTPS server must be on different ports");
             }
 
-            if(m_networkServersInfo.HttpUsesSSL)
-            {
-                m_httpServer = new BaseHttpServer(
-                        mainSSLport, m_networkServersInfo.HttpUsesSSL,
-                        m_networkServersInfo.HttpSSLCN,
-                        m_networkServersInfo.HttpSSLCertPath, m_networkServersInfo.HttpSSLCNCertPass);
-                m_httpServer.Start(true,true);
-                MainServer.AddHttpServer(m_httpServer);
-            }
+            m_log.InfoFormat("[REGION SERVER]: Starting HTTP server on port {0}", m_httpServerPort);
+            m_httpServer.Start();
 
-            // unsecure main server
-            BaseHttpServer server = new BaseHttpServer(mainport);
-            if(!m_networkServersInfo.HttpUsesSSL)
-            {
-                m_httpServer = server;
-                server.Start(true, true);
-            }
-            else
-                server.Start(false, false);
-
-            MainServer.AddHttpServer(server);
-            MainServer.UnSecureInstance = server;
-
+            MainServer.AddHttpServer(m_httpServer);
             MainServer.Instance = m_httpServer;
 
             // "OOB" Server
@@ -107,22 +89,22 @@ namespace OpenSim
             {
                 if (!m_networkServersInfo.ssl_external)
                 {
-                    server = new BaseHttpServer(
-                        m_networkServersInfo.https_port, m_networkServersInfo.ssl_listener,
-                        m_networkServersInfo.cert_path,
+                    BaseHttpServer server = new BaseHttpServer(
+                        m_networkServersInfo.https_port, m_networkServersInfo.ssl_listener, m_networkServersInfo.cert_path,
                         m_networkServersInfo.cert_pass);
 
-                    m_log.InfoFormat("[REGION SERVER]: Starting OOB HTTPS server on port {0}", server.SSLPort);
-                    server.Start(false, false);
+                    m_log.InfoFormat("[REGION SERVER]: Starting HTTPS server on port {0}", server.Port);
                     MainServer.AddHttpServer(server);
+                    server.Start();
                 }
                 else
                 {
-                    server = new BaseHttpServer(m_networkServersInfo.https_port);
+                    BaseHttpServer server = new BaseHttpServer(
+                        m_networkServersInfo.https_port);
 
                     m_log.InfoFormat("[REGION SERVER]: Starting HTTP server on port {0} for external HTTPS", server.Port);
-                    server.Start(false, false);
                     MainServer.AddHttpServer(server);
+                    server.Start();
                 }
             }
 

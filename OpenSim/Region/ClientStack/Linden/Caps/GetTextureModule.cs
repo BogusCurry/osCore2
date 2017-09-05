@@ -146,13 +146,39 @@ namespace OpenSim.Region.ClientStack.Linden
                 }
             }
         }
- 
+        private int ExtractImageThrottle(byte[] pthrottles)
+        {
+
+            byte[] adjData;
+            int pos = 0;
+
+            if (!BitConverter.IsLittleEndian)
+            {
+                byte[] newData = new byte[7 * 4];
+                Buffer.BlockCopy(pthrottles, 0, newData, 0, 7 * 4);
+
+                for (int i = 0; i < 7; i++)
+                    Array.Reverse(newData, i * 4, 4);
+
+                adjData = newData;
+            }
+            else
+            {
+                adjData = pthrottles;
+            }
+
+            pos = pos + 20;
+            int texture = (int)(BitConverter.ToSingle(adjData, pos) * 0.125f); //pos += 4;
+            //int asset = (int)(BitConverter.ToSingle(adjData, pos) * 0.125f);
+            return texture;
+        }
+
         // Now we know when the throttle is changed by the client in the case of a root agent or by a neighbor region in the case of a child agent.
         public void ThrottleUpdate(ScenePresence p)
         {
             byte[] throttles = p.ControllingClient.GetThrottlesPacked(1);
             UUID user = p.UUID;
-            int imagethrottle = p.ControllingClient.GetAgentThrottleSilent((int)ThrottleOutPacketType.Texture);
+            int imagethrottle = ExtractImageThrottle(throttles);
             PollServiceTextureEventArgs args;
             if (m_pollservices.TryGetValue(user,out args))
             {
@@ -192,15 +218,13 @@ namespace OpenSim.Region.ClientStack.Linden
                     new List<Hashtable>();
             private Dictionary<UUID, aPollResponse> responses =
                     new Dictionary<UUID, aPollResponse>();
-            private HashSet<UUID> dropedResponses = new HashSet<UUID>();
 
             private Scene m_scene;
-            private CapsDataThrottler m_throttler;
+            private CapsDataThrottler m_throttler = new CapsDataThrottler(100000);
             public PollServiceTextureEventArgs(UUID pId, Scene scene) :
-                    base(null, "", null, null, null, null, pId, int.MaxValue)              
+                    base(null, "", null, null, null, pId, int.MaxValue)
             {
                 m_scene = scene;
-                m_throttler = new CapsDataThrottler(100000);
                 // x is request id, y is userid
                 HasEvents = (x, y) =>
                 {
@@ -211,16 +235,6 @@ namespace OpenSim.Region.ClientStack.Linden
 
                     }
                 };
-
-                Drop = (x, y) =>
-                {
-                    lock (responses)
-                    {
-                        responses.Remove(x);
-                        dropedResponses.Add(x);
-                    }
-               };
-
                 GetEvents = (x, y) =>
                 {
                     lock (responses)
@@ -291,72 +305,53 @@ namespace OpenSim.Region.ClientStack.Linden
                 if(m_scene.ShuttingDown)
                     return;
 
-                lock (responses)
+                if (requestinfo.send503)
                 {
-                    lock(dropedResponses)
-                    {
-                        if(dropedResponses.Contains(requestID))
-                        {
-                            dropedResponses.Remove(requestID);
-                            return;
-                        }
-                    }
+                    response = new Hashtable();
 
-                    if (requestinfo.send503)
-                    {
-                        response = new Hashtable();
+                    response["int_response_code"] = 503;
+                    response["str_response_string"] = "Throttled";
+                    response["content_type"] = "text/plain";
+                    response["keepalive"] = false;
+                    response["reusecontext"] = false;
 
-                        response["int_response_code"] = 503;
-                        response["str_response_string"] = "Throttled";
-                        response["content_type"] = "text/plain";
-                        response["keepalive"] = false;
-                        response["reusecontext"] = false;
+                    Hashtable headers = new Hashtable();
+                    headers["Retry-After"] = 30;
+                    response["headers"] = headers;
 
-                        Hashtable headers = new Hashtable();
-                        headers["Retry-After"] = 30;
-                        response["headers"] = headers;
-
+                    lock (responses)
                         responses[requestID] = new aPollResponse() {bytes = 0, response = response};
 
-                        return;
-                    }
+                    return;
+                }
 
                 // If the avatar is gone, don't bother to get the texture
-                    if (m_scene.GetScenePresence(Id) == null)
-                    {
-                        response = new Hashtable();
+                if (m_scene.GetScenePresence(Id) == null)
+                {
+                    response = new Hashtable();
 
-                        response["int_response_code"] = 500;
-                        response["str_response_string"] = "Script timeout";
-                        response["content_type"] = "text/plain";
-                        response["keepalive"] = false;
-                        response["reusecontext"] = false;
+                    response["int_response_code"] = 500;
+                    response["str_response_string"] = "Script timeout";
+                    response["content_type"] = "text/plain";
+                    response["keepalive"] = false;
+                    response["reusecontext"] = false;
 
+                    lock (responses)
                         responses[requestID] = new aPollResponse() {bytes = 0, response = response};
 
-                        return;
-                    }
+                    return;
                 }
 
                 response = m_getTextureHandler.Handle(requestinfo.request);
-
                 lock (responses)
                 {
-                    lock(dropedResponses)
-                    {
-                        if(dropedResponses.Contains(requestID))
-                        {
-                            dropedResponses.Remove(requestID);
-                            m_throttler.PassTime();
-                            return;
-                        }
-                    }
                     responses[requestID] = new aPollResponse()
-                        {
-                            bytes = (int) response["int_bytes"],
-                            response = response
-                        };
-                } 
+                                               {
+                                                   bytes = (int) response["int_bytes"],
+                                                   response = response
+                                               };
+
+                }
                 m_throttler.PassTime();
             }
 
@@ -481,7 +476,7 @@ namespace OpenSim.Region.ClientStack.Linden
                     return;
                 int add = (int)(ThrottleBytes * timeElapsed * 0.001);
                 if (add >= 1000)
-            {
+                {
                     lastTimeElapsed = currenttime;
                     BytesSent -= add;
                     if (BytesSent < 0) BytesSent = 0;
